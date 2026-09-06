@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Códigos pendientes</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --panel2:#334155; --line:#475569;
+    --txt:#f1f5f9; --muted:#94a3b8;
+    --accent:#38bdf8; --accent-d:#0ea5e9;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--txt);
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding-bottom:80px;
+  }
+  header{
+    position:sticky; top:0; z-index:20;
+    background:linear-gradient(180deg,#0f172a,#0f172aee);
+    backdrop-filter:blur(6px);
+    padding:12px 14px calc(12px + env(safe-area-inset-top,0));
+    padding-top:calc(12px + env(safe-area-inset-top,0));
+    border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:10px;
+  }
+  header h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.2px;flex:1}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+  .dot.on{background:var(--ok)} .dot.off{background:var(--bad)}
+  main{padding:14px;max-width:720px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+  .card h2{margin:0 0 10px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  button{
+    font:inherit; font-weight:600; color:var(--txt);
+    background:var(--panel2); border:1px solid var(--line);
+    border-radius:10px; padding:11px 14px; cursor:pointer;
+  }
+  button:active{transform:translateY(1px)}
+  button.primary{background:var(--accent-d);border-color:var(--accent);color:#04222e}
+  button.ok{background:var(--ok);border-color:#16a34a;color:#052e12}
+  button.bad{background:transparent;border-color:var(--bad);color:#fca5a5}
+  button.ghost{background:transparent}
+  button.wide{width:100%}
+  button:disabled{opacity:.5}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row > *{flex:1}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:600}
+  input,textarea,select{
+    width:100%; font:inherit; color:var(--txt);
+    background:#0b1220; border:1px solid var(--line); border-radius:10px;
+    padding:11px 12px;
+  }
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent);outline-offset:0}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+
+  /* ---- escáner ---- */
+  #scanWrap{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3;display:none}
+  #scanWrap.on{display:block}
+  #video{width:100%;height:100%;object-fit:cover;display:block}
+  .reticle{position:absolute;inset:0;pointer-events:none}
+  .reticle::before{
+    content:"";position:absolute;left:8%;right:8%;top:50%;height:2px;
+    background:linear-gradient(90deg,transparent,#38bdf8,transparent);
+    box-shadow:0 0 12px #38bdf8; transform:translateY(-1px);
+    animation:sweep 2s ease-in-out infinite;
+  }
+  @keyframes sweep{0%,100%{top:32%}50%{top:68%}}
+  .reticle .frame{position:absolute;left:8%;right:8%;top:28%;bottom:28%;border:2px solid #ffffff55;border-radius:10px}
+
+  /* ---- resultado del escaneo ---- */
+  #result{display:none}
+  .found{border-color:var(--ok)!important}
+  .missing{border-color:var(--warn)!important}
+  .bigcode{font-size:22px;font-weight:800;letter-spacing:1px;word-break:break-all}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.5px}
+  .tag.ok{background:#052e12;color:#4ade80;border:1px solid #16a34a}
+  .tag.warn{background:#3a2a05;color:#fbbf24;border:1px solid #b45309}
+
+  /* ---- lista de pendientes ---- */
+  .pill{display:flex;gap:6px;margin-bottom:10px}
+  .pill button{flex:1;padding:8px;font-size:13px}
+  .pill button.sel{background:var(--accent-d);border-color:var(--accent);color:#04222e}
+  .item{border:1px solid var(--line);border-radius:12px;padding:11px;margin-bottom:10px;background:#0b1220}
+  .item.done{opacity:.6}
+  .item .code{font-weight:800;letter-spacing:.5px;word-break:break-all}
+  .item .desc{margin:3px 0}
+  .item .meta{font-size:12px;color:var(--muted)}
+  .item .acts{display:flex;gap:8px;margin-top:9px}
+  .item .acts button{padding:8px 10px;font-size:13px}
+  .strike{text-decoration:line-through}
+  .empty{color:var(--muted);text-align:center;padding:24px 0}
+
+  /* ---- toast ---- */
+  #toast{
+    position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(120%);
+    background:#0b1220;border:1px solid var(--line);border-radius:12px;
+    padding:12px 16px;max-width:90vw;z-index:50;transition:transform .25s;
+    box-shadow:0 10px 30px #000a;font-weight:600
+  }
+  #toast.show{transform:translateX(-50%) translateY(0)}
+  #toast.ok{border-color:var(--ok)} #toast.bad{border-color:var(--bad)}
+
+  /* ---- modal config ---- */
+  dialog{
+    border:1px solid var(--line);border-radius:16px;background:var(--panel);
+    color:var(--txt);max-width:520px;width:92vw;padding:18px
+  }
+  dialog::backdrop{background:#000b}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+  .kpi b{color:var(--txt);font-size:16px;display:block}
+  progress{width:100%;height:8px}
+</style>
+</head>
+<body>
+
+<header>
+  <span id="statusDot" class="dot" title="Estado de conexión"></span>
+  <h1>Códigos pendientes</h1>
+  <button class="ghost" id="btnCfg" style="padding:8px 10px">⚙️</button>
+</header>
+
+<main>
+
+  <!-- ====================== ESCÁNER ====================== -->
+  <section class="card" id="cardScan">
+    <h2>Escanear</h2>
+    <div class="row">
+      <button class="primary" id="btnStart">▶ Iniciar cámara</button>
+      <button id="btnStop" disabled>■ Detener</button>
+    </div>
+    <div id="scanWrap" style="margin-top:12px">
+      <video id="video" playsinline muted></video>
+      <div class="reticle"><div class="frame"></div></div>
+    </div>
+    <div class="hint" id="scanHint">Apunta al código de barras. También puedes teclearlo abajo.</div>
+
+    <label for="manual">Captura manual</label>
+    <div class="row">
+      <input id="manual" inputmode="numeric" autocomplete="off" placeholder="Ej. 7501234567890">
+      <button id="btnManual" style="flex:0 0 auto">Buscar</button>
+    </div>
+  </section>
+
+  <!-- ====================== RESULTADO ====================== -->
+  <section class="card" id="result">
+    <h2>Resultado</h2>
+    <div class="bigcode" id="rCode">—</div>
+    <div style="margin:8px 0"><span class="tag" id="rTag">—</span></div>
+    <div id="rBody"></div>
+  </section>
+
+  <!-- ====================== ALTA DE PENDIENTE ====================== -->
+  <section class="card" id="formCard" style="display:none">
+    <h2>Registrar pendiente</h2>
+    <input type="hidden" id="fId">
+    <label>Código escaneado</label>
+    <input id="fCodigo" readonly>
+    <label>Descripción del artículo *</label>
+    <input id="fDesc" placeholder="Ej. Atún en agua">
+    <div class="row">
+      <div>
+        <label>Marca *</label>
+        <input id="fMarca" placeholder="Ej. Dolores">
+      </div>
+      <div>
+        <label>Gramaje *</label>
+        <input id="fGram" placeholder="Ej. 140 g">
+      </div>
+    </div>
+    <label>Embalaje por caja (opcional)</label>
+    <input id="fEmb" inputmode="numeric" placeholder="Ej. 24">
+    <label>Nota (opcional)</label>
+    <input id="fNota" placeholder="Cualquier observación">
+    <div class="row" style="margin-top:14px">
+      <button class="ghost" id="btnCancel">Cancelar</button>
+      <button class="primary" id="btnSave">Guardar pendiente</button>
+    </div>
+  </section>
+
+  <!-- ====================== PENDIENTES ====================== -->
+  <section class="card">
+    <h2>Lista</h2>
+    <div class="pill">
+      <button data-f="pendiente" class="sel">Pendientes</button>
+      <button data-f="listo">Registrados</button>
+      <button data-f="todos">Todos</button>
+    </div>
+    <input id="search" placeholder="Buscar código o descripción…" style="margin-bottom:10px">
+    <div id="list"></div>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="btnRefresh">↻ Actualizar</button>
+      <button class="ghost" id="btnExport">⬇ Exportar CSV</button>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast"></div>
+
+<!-- ====================== CONFIG ====================== -->
+<dialog id="cfg">
+  <h2 style="margin-top:0">Configuración</h2>
+
+  <label>URL de la API (Apps Script /exec)</label>
+  <input id="cfgUrl" class="mono" placeholder="https://script.google.com/macros/s/…/exec">
+  <div class="row" style="margin-top:8px">
+    <button id="cfgTest">Probar conexión</button>
+    <button class="primary" id="cfgSave">Guardar</button>
+  </div>
+  <div class="hint" id="cfgMsg"></div>
+
+  <hr style="border-color:var(--line);margin:16px 0">
+
+  <h2 style="margin:0 0 8px">Catálogo de productos</h2>
+  <div class="kpi" style="margin-bottom:10px">
+    <div><b id="kCat">0</b> en este dispositivo</div>
+    <div><b id="kPend">0</b> pendientes</div>
+  </div>
+  <div class="row">
+    <button id="btnSync">↻ Sincronizar desde la hoja</button>
+  </div>
+
+  <label style="margin-top:14px">Cargar / reemplazar catálogo desde Excel</label>
+  <input type="file" id="xlsx" accept=".xlsx,.xls,.csv">
+  <div class="hint">Se leen las columnas <b>CODIGO</b> y <b>PRODUCTO</b>. Sube el catálogo a la hoja de Google y a este dispositivo.</div>
+  <progress id="upProg" value="0" max="100" style="display:none;margin-top:8px"></progress>
+  <div class="hint" id="upMsg"></div>
+
+  <hr style="border-color:var(--line);margin:16px 0">
+  <button class="wide ghost" id="cfgClose">Cerrar</button>
+</dialog>
+
+<!-- SheetJS para leer Excel -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- ZXing: respaldo de escaneo para navegadores sin BarcodeDetector (iOS Safari) -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+
+<script>
+"use strict";
+/* ======================================================================
+   Estado y almacenamiento local
+   ====================================================================== */
+const LS = {
+  get url(){ return localStorage.getItem('api_url') || ''; },
+  set url(v){ localStorage.setItem('api_url', v.trim()); },
+};
+const state = {
+  catalog: new Map(),      // codigo -> producto
+  catalogCount: 0,
+  pendientes: [],          // [{id,codigo,...}]
+  filter: 'pendiente',
+  scanning: false,
+  lastHit: {code:null, t:0},
+};
+
+/* --- IndexedDB mínima para el catálogo (rápido y offline) --- */
+const DB_NAME='codsdb', STORE='catalogo';
+function idb(){
+  return new Promise((res,rej)=>{
+    const r = indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded = ()=> r.result.createObjectStore(STORE);
+    r.onsuccess = ()=> res(r.result);
+    r.onerror = ()=> rej(r.error);
+  });
+}
+async function idbSet(key,val){
+  const db = await idb();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    tx.objectStore(STORE).put(val,key);
+    tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+  });
+}
+async function idbGet(key){
+  const db = await idb();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readonly');
+    const rq = tx.objectStore(STORE).get(key);
+    rq.onsuccess = ()=> res(rq.result);
+    rq.onerror = ()=> rej(rq.error);
+  });
+}
+
+/* ======================================================================
+   Utilidades
+   ====================================================================== */
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+function normCode(v){
+  if(v==null) return '';
+  let s = String(v).trim();
+  if(/^\d+\.0+$/.test(s)) s = s.split('.')[0];
+  if(/^\d+(\.\d+)?[eE]\+?\d+$/.test(s)){ const n=Number(s); if(isFinite(n)) s=n.toFixed(0); }
+  return s;
+}
+function toast(msg,kind){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'show ' + (kind||'');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=> t.className = t.className.replace('show','').trim(), 2600);
+}
+function beep(good){
+  try{
+    const ac = new (window.AudioContext||window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.value = good ? 880 : 300;
+    g.gain.value = 0.05;
+    o.start(); o.stop(ac.currentTime + (good?0.12:0.22));
+  }catch(e){}
+}
+function vibrate(ms){ try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} }
+function fmtDate(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d)) return '';
+  return d.toLocaleDateString('es-MX',{day:'2-digit',month:'2-digit',year:'2-digit'}) +
+    ' ' + d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+}
+
+/* ======================================================================
+   API (Apps Script)
+   ====================================================================== */
+async function api(action, payload){
+  const url = LS.url;
+  if(!url) throw new Error('Configura la URL de la API (⚙️).');
+  const res = await fetch(url, {
+    method:'POST',
+    // text/plain evita el preflight CORS de Apps Script
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(Object.assign({action}, payload||{}))
+  });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data = await res.json();
+  if(data && data.ok === false) throw new Error(data.error || 'Error del servidor');
+  return data;
+}
+function setDot(ok){
+  const d = $('#statusDot');
+  d.className = 'dot ' + (ok===true?'on':ok===false?'off':'');
+}
+
+/* ======================================================================
+   Catálogo
+   ====================================================================== */
+async function loadCatalogFromIDB(){
+  const arr = await idbGet('rows');
+  state.catalog.clear();
+  if(Array.isArray(arr)){
+    for(const [c,p] of arr) state.catalog.set(c,p);
+  }
+  state.catalogCount = state.catalog.size;
+  updateKpis();
+}
+async function saveCatalogToIDB(){
+  await idbSet('rows', [...state.catalog.entries()]);
+}
+async function syncCatalog(){
+  const btn = $('#btnSync'); btn.disabled = true; btn.textContent = 'Sincronizando…';
+  try{
+    const data = await api('getProductos');
+    state.catalog.clear();
+    for(const row of data.productos){
+      const c = normCode(row.codigo);
+      if(c) state.catalog.set(c, row.producto || '');
+    }
+    state.catalogCount = state.catalog.size;
+    await saveCatalogToIDB();
+    updateKpis();
+    setDot(true);
+    toast('Catálogo sincronizado: ' + state.catalogCount + ' productos', 'ok');
+  }catch(e){
+    setDot(false);
+    toast('No se pudo sincronizar: ' + e.message, 'bad');
+  }finally{
+    btn.disabled = false; btn.textContent = '↻ Sincronizar desde la hoja';
+  }
+}
+function updateKpis(){
+  $('#kCat').textContent = state.catalogCount;
+  $('#kPend').textContent = state.pendientes.filter(p=>p.estado!=='listo').length;
+}
+
+/* ---- Carga desde Excel ---- */
+$('#xlsx').addEventListener('change', async (ev)=>{
+  const file = ev.target.files[0];
+  if(!file) return;
+  const prog = $('#upProg'), msg = $('#upMsg');
+  prog.style.display = 'block'; prog.value = 5; msg.textContent = 'Leyendo archivo…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    prog.value = 25;
+
+    // localizar columnas CODIGO / PRODUCTO por encabezado
+    let hi = rows.findIndex(r => r.some(c => /codigo/i.test(String(c))) );
+    if(hi < 0) hi = 0;
+    const head = rows[hi].map(c => String(c).trim().toUpperCase());
+    let ci = head.indexOf('CODIGO');
+    let pi = head.indexOf('PRODUCTO');
+    if(ci < 0) ci = 0;
+    if(pi < 0) pi = 1;
+
+    const out = [];
+    const seen = new Set();
+    for(let i=hi+1; i<rows.length; i++){
+      const cod = normCode(rows[i][ci]);
+      const prod = String(rows[i][pi] ?? '').trim();
+      if(!cod && !prod) continue;
+      if(cod && seen.has(cod)) continue;
+      if(cod) seen.add(cod);
+      out.push({codigo:cod, producto:prod});
+    }
+    prog.value = 45;
+    msg.textContent = `Se encontraron ${out.length} filas. Enviando a la hoja…`;
+
+    // enviar por bloques para no exceder límites de payload
+    // (una sola llamada replaceProductos con todo; 3k filas ~ 150 KB, va bien)
+    const data = await api('replaceProductos', {productos: out});
+    prog.value = 80;
+
+    // refrescar catálogo local
+    state.catalog.clear();
+    for(const r of out){ if(r.codigo) state.catalog.set(r.codigo, r.producto); }
+    state.catalogCount = state.catalog.size;
+    await saveCatalogToIDB();
+    updateKpis();
+    prog.value = 100;
+    msg.textContent = `Listo. Catálogo actualizado: ${data.total} productos en la hoja, ${state.catalogCount} en este dispositivo.`;
+    toast('Catálogo cargado', 'ok');
+    setDot(true);
+  }catch(e){
+    msg.textContent = 'Error: ' + e.message;
+    toast('Error al cargar Excel: ' + e.message, 'bad');
+  }finally{
+    ev.target.value = '';
+    setTimeout(()=> prog.style.display='none', 1500);
+  }
+});
+
+/* ======================================================================
+   Escáner de códigos de barra
+   ====================================================================== */
+let stream = null, detector = null, zxReader = null, rafId = null;
+const BARCODE_FORMATS = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','codabar'];
+
+async function startScan(){
+  if(state.scanning) return;
+  const video = $('#video');
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:960} },
+      audio:false
+    });
+  }catch(e){
+    toast('No se pudo abrir la cámara: ' + e.message, 'bad');
+    return;
+  }
+  video.srcObject = stream;
+  await video.play().catch(()=>{});
+  $('#scanWrap').classList.add('on');
+  $('#btnStart').disabled = true;
+  $('#btnStop').disabled = false;
+  state.scanning = true;
+
+  if('BarcodeDetector' in window){
+    try{
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      detector = new window.BarcodeDetector({
+        formats: BARCODE_FORMATS.filter(f => supported.includes(f))
+      });
+      $('#scanHint').textContent = 'Escáner nativo activo. Apunta al código.';
+      loopNative(video);
+      return;
+    }catch(e){ /* cae a ZXing */ }
+  }
+  // Respaldo ZXing
+  if(window.ZXing){
+    $('#scanHint').textContent = 'Escáner (ZXing) activo. Apunta al código.';
+    zxReader = new ZXing.BrowserMultiFormatReader();
+    zxReader.decodeFromVideoElement(video, (res, err)=>{
+      if(res) onDetected(res.getText());
+    });
+  }else{
+    $('#scanHint').textContent = 'Tu navegador no soporta escaneo. Usa la captura manual.';
+  }
+}
+
+function loopNative(video){
+  if(!state.scanning) return;
+  detector.detect(video)
+    .then(codes=>{ if(codes && codes.length) onDetected(codes[0].rawValue); })
+    .catch(()=>{})
+    .finally(()=>{ rafId = requestAnimationFrame(()=> loopNative(video)); });
+}
+
+function stopScan(){
+  state.scanning = false;
+  if(rafId) cancelAnimationFrame(rafId), rafId = null;
+  if(zxReader){ try{ zxReader.reset(); }catch(e){} zxReader = null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+  $('#video').srcObject = null;
+  $('#scanWrap').classList.remove('on');
+  $('#btnStart').disabled = false;
+  $('#btnStop').disabled = true;
+}
+
+function onDetected(raw){
+  const code = normCode(raw);
+  if(!code) return;
+  const now = Date.now();
+  // anti-repetición: mismo código dentro de 2.5 s se ignora
+  if(state.lastHit.code === code && (now - state.lastHit.t) < 2500) return;
+  state.lastHit = {code, t:now};
+  handleCode(code, true);
+}
+
+/* ======================================================================
+   Lógica principal: comparar contra catálogo
+   ====================================================================== */
+function handleCode(code, fromScan){
+  const result = $('#result');
+  result.style.display = 'block';
+  result.classList.remove('found','missing');
+  $('#rCode').textContent = code;
+
+  const hit = state.catalog.get(code);
+  const alreadyPend = state.pendientes.find(p => p.codigo === code);
+
+  if(hit !== undefined){
+    result.classList.add('found');
+    $('#rTag').className = 'tag ok';
+    $('#rTag').textContent = 'Registrado';
+    $('#rBody').innerHTML = `<div style="font-size:17px;font-weight:700;margin-top:4px">${escapeHtml(hit || '(sin descripción en catálogo)')}</div>
+      <div class="hint">Este código ya existe en tu catálogo. No hay nada que hacer.</div>`;
+    hideForm();
+    beep(true); vibrate(60);
+    if(fromScan) toast('✔ Ya registrado', 'ok');
+  }else if(alreadyPend){
+    result.classList.add('missing');
+    $('#rTag').className = 'tag warn';
+    $('#rTag').textContent = 'Ya en pendientes';
+    $('#rBody').innerHTML = `<div style="margin-top:4px">${escapeHtml(alreadyPend.descripcion||'(sin descripción)')} — ${escapeHtml(alreadyPend.marca||'')} ${escapeHtml(alreadyPend.gramaje||'')}</div>
+      <div class="hint">Estado: <b>${alreadyPend.estado==='listo'?'registrado en punto de venta':'pendiente'}</b>. Puedes editarlo en la lista de abajo.</div>`;
+    hideForm();
+    beep(false); vibrate([40,40,40]);
+    if(fromScan) toast('Ya estaba en la lista', 'warn');
+  }else{
+    result.classList.add('missing');
+    $('#rTag').className = 'tag warn';
+    $('#rTag').textContent = 'No registrado';
+    $('#rBody').innerHTML = `<div class="hint" style="margin-top:4px">Este código no está en tu catálogo. Captura sus datos para agregarlo a pendientes.</div>`;
+    showForm(code);
+    beep(false); vibrate(180);
+    if(fromScan) toast('⚠ Código nuevo — captura los datos', 'warn');
+  }
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ======================================================================
+   Formulario de alta
+   ====================================================================== */
+function showForm(code){
+  $('#formCard').style.display = 'block';
+  $('#fId').value = '';
+  $('#fCodigo').value = code;
+  $('#fDesc').value = ''; $('#fMarca').value = '';
+  $('#fGram').value = ''; $('#fEmb').value = ''; $('#fNota').value = '';
+  setTimeout(()=> $('#fDesc').focus(), 60);
+  $('#formCard').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function hideForm(){ $('#formCard').style.display = 'none'; }
+
+$('#btnCancel').onclick = ()=>{
+  hideForm();
+  $('#formCard').querySelector('h2').textContent = 'Registrar pendiente';
+  bindSaveDefault();
+};
+
+$('#btnSave').onclick = async ()=>{
+  const codigo = $('#fCodigo').value;
+  const descripcion = $('#fDesc').value.trim();
+  const marca = $('#fMarca').value.trim();
+  const gramaje = $('#fGram').value.trim();
+  if(!descripcion || !marca || !gramaje){
+    toast('Descripción, marca y gramaje son obligatorios', 'bad');
+    return;
+  }
+  const btn = $('#btnSave'); btn.disabled = true; btn.textContent = 'Guardando…';
+  try{
+    const data = await api('addPendiente', {
+      codigo, descripcion, marca, gramaje,
+      embalaje_caja: $('#fEmb').value.trim(),
+      nota: $('#fNota').value.trim()
+    });
+    // actualizar lista local
+    const p = data.pendiente;
+    const ix = state.pendientes.findIndex(x => x.id === p.id || x.codigo === p.codigo);
+    if(ix >= 0) state.pendientes[ix] = p; else state.pendientes.unshift(p);
+    renderList(); updateKpis();
+    hideForm();
+    $('#result').style.display = 'none';
+    setDot(true);
+    toast(data.duplicado ? 'Ese código ya estaba en pendientes' : '✔ Pendiente guardado', 'ok');
+  }catch(e){
+    setDot(false);
+    toast('No se pudo guardar: ' + e.message, 'bad');
+  }finally{
+    btn.disabled = false; btn.textContent = 'Guardar pendiente';
+  }
+};
+
+/* ======================================================================
+   Lista de pendientes
+   ====================================================================== */
+async function refreshPendientes(){
+  const btn = $('#btnRefresh'); btn.disabled = true;
+  try{
+    const data = await api('getPendientes');
+    state.pendientes = data.pendientes || [];
+    renderList(); updateKpis();
+    setDot(true);
+  }catch(e){
+    setDot(false);
+    toast('No se pudo actualizar la lista: ' + e.message, 'bad');
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderList(){
+  const q = $('#search').value.trim().toLowerCase();
+  const cont = $('#list');
+  let items = state.pendientes.slice();
+
+  if(state.filter === 'pendiente') items = items.filter(p => p.estado !== 'listo');
+  else if(state.filter === 'listo') items = items.filter(p => p.estado === 'listo');
+
+  if(q){
+    items = items.filter(p =>
+      (p.codigo||'').toLowerCase().includes(q) ||
+      (p.descripcion||'').toLowerCase().includes(q) ||
+      (p.marca||'').toLowerCase().includes(q)
+    );
+  }
+
+  // pendientes primero, luego por fecha de alta desc
+  items.sort((a,b)=>{
+    if((a.estado==='listo') !== (b.estado==='listo')) return a.estado==='listo' ? 1 : -1;
+    return (b.fecha_alta||'').localeCompare(a.fecha_alta||'');
+  });
+
+  if(!items.length){
+    cont.innerHTML = `<div class="empty">Sin resultados.</div>`;
+    return;
+  }
+
+  cont.innerHTML = items.map(p=>{
+    const done = p.estado === 'listo';
+    const emb = p.embalaje_caja ? ` · caja: ${escapeHtml(p.embalaje_caja)}` : '';
+    return `<div class="item ${done?'done':''}" data-id="${escapeHtml(p.id)}">
+      <div class="code ${done?'strike':''}">${escapeHtml(p.codigo)}</div>
+      <div class="desc">${escapeHtml(p.descripcion||'(sin descripción)')}</div>
+      <div class="meta">${escapeHtml(p.marca||'')} ${escapeHtml(p.gramaje||'')}${emb}</div>
+      <div class="meta">Alta: ${fmtDate(p.fecha_alta)}${done? ' · Registrado: '+fmtDate(p.fecha_listo) : ''}</div>
+      ${p.nota ? `<div class="meta">📝 ${escapeHtml(p.nota)}</div>` : ''}
+      <div class="acts">
+        ${done
+          ? `<button data-act="reopen">↩ Reabrir</button>`
+          : `<button class="ok" data-act="done">✔ Palomear</button>`}
+        <button data-act="edit">✎ Editar</button>
+        <button class="bad" data-act="del">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+$('#list').addEventListener('click', async (ev)=>{
+  const btn = ev.target.closest('button[data-act]');
+  if(!btn) return;
+  const wrap = ev.target.closest('.item');
+  const id = wrap.dataset.id;
+  const act = btn.dataset.act;
+  const p = state.pendientes.find(x => x.id === id);
+  if(!p) return;
+
+  if(act === 'del'){
+    if(!confirm('¿Eliminar este pendiente?\n' + p.codigo + ' — ' + (p.descripcion||''))) return;
+    btn.disabled = true;
+    try{
+      await api('deletePendiente', {id});
+      state.pendientes = state.pendientes.filter(x => x.id !== id);
+      renderList(); updateKpis(); setDot(true);
+      toast('Eliminado', 'ok');
+    }catch(e){ setDot(false); toast('Error: ' + e.message, 'bad'); btn.disabled = false; }
+    return;
+  }
+
+  if(act === 'done' || act === 'reopen'){
+    const nuevo = act === 'done' ? 'listo' : 'pendiente';
+    btn.disabled = true;
+    try{
+      const data = await api('updatePendiente', {id, estado:nuevo});
+      const ix = state.pendientes.findIndex(x => x.id === id);
+      if(ix >= 0) state.pendientes[ix] = data.pendiente;
+      renderList(); updateKpis(); setDot(true);
+      toast(nuevo === 'listo' ? '✔ Marcado como registrado' : 'Reabierto', 'ok');
+      if(nuevo==='listo') { beep(true); vibrate(60); }
+    }catch(e){ setDot(false); toast('Error: ' + e.message, 'bad'); btn.disabled = false; }
+    return;
+  }
+
+  if(act === 'edit'){
+    $('#formCard').style.display = 'block';
+    $('#formCard').querySelector('h2').textContent = 'Editar pendiente';
+    $('#fId').value = p.id;
+    $('#fCodigo').value = p.codigo;
+    $('#fDesc').value = p.descripcion || '';
+    $('#fMarca').value = p.marca || '';
+    $('#fGram').value = p.gramaje || '';
+    $('#fEmb').value = p.embalaje_caja || '';
+    $('#fNota').value = p.nota || '';
+    $('#formCard').scrollIntoView({behavior:'smooth', block:'center'});
+
+    // reconfigurar botón guardar para modo edición
+    const save = $('#btnSave');
+    save.textContent = 'Guardar cambios';
+    save.onclick = async ()=>{
+      const descripcion = $('#fDesc').value.trim();
+      const marca = $('#fMarca').value.trim();
+      const gramaje = $('#fGram').value.trim();
+      if(!descripcion || !marca || !gramaje){ toast('Descripción, marca y gramaje son obligatorios','bad'); return; }
+      save.disabled = true; save.textContent = 'Guardando…';
+      try{
+        const data = await api('updatePendiente', {
+          id: p.id, descripcion, marca, gramaje,
+          embalaje_caja: $('#fEmb').value.trim(),
+          nota: $('#fNota').value.trim()
+        });
+        const ix = state.pendientes.findIndex(x => x.id === p.id);
+        if(ix >= 0) state.pendientes[ix] = data.pendiente;
+        renderList(); updateKpis();
+        hideForm();
+        $('#formCard').querySelector('h2').textContent = 'Registrar pendiente';
+        bindSaveDefault();
+        setDot(true);
+        toast('✔ Cambios guardados', 'ok');
+      }catch(e){ setDot(false); toast('Error: ' + e.message, 'bad'); }
+      finally{ save.disabled = false; }
+    };
+  }
+});
+
+// re-liga el handler por defecto de "Guardar pendiente" (alta)
+function bindSaveDefault(){
+  $('#btnSave').textContent = 'Guardar pendiente';
+  $('#btnSave').onclick = async ()=>{
+    const codigo = $('#fCodigo').value;
+    const descripcion = $('#fDesc').value.trim();
+    const marca = $('#fMarca').value.trim();
+    const gramaje = $('#fGram').value.trim();
+    if(!descripcion || !marca || !gramaje){ toast('Descripción, marca y gramaje son obligatorios','bad'); return; }
+    const btn = $('#btnSave'); btn.disabled = true; btn.textContent = 'Guardando…';
+    try{
+      const data = await api('addPendiente', {
+        codigo, descripcion, marca, gramaje,
+        embalaje_caja: $('#fEmb').value.trim(),
+        nota: $('#fNota').value.trim()
+      });
+      const pp = data.pendiente;
+      const ix = state.pendientes.findIndex(x => x.id === pp.id || x.codigo === pp.codigo);
+      if(ix >= 0) state.pendientes[ix] = pp; else state.pendientes.unshift(pp);
+      renderList(); updateKpis(); hideForm();
+      $('#result').style.display = 'none';
+      setDot(true);
+      toast(data.duplicado ? 'Ese código ya estaba en pendientes' : '✔ Pendiente guardado', 'ok');
+    }catch(e){ setDot(false); toast('No se pudo guardar: ' + e.message, 'bad'); }
+    finally{ btn.disabled = false; btn.textContent = 'Guardar pendiente'; }
+  };
+}
+
+/* ---- filtros y búsqueda ---- */
+$$('.pill button').forEach(b=>{
+  b.onclick = ()=>{
+    $$('.pill button').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');
+    state.filter = b.dataset.f;
+    renderList();
+  };
+});
+$('#search').addEventListener('input', renderList);
+
+/* ---- exportar CSV ---- */
+$('#btnExport').onclick = ()=>{
+  const rows = [['codigo','descripcion','marca','gramaje','embalaje_caja','estado','fecha_alta','fecha_listo','nota']];
+  for(const p of state.pendientes){
+    rows.push([p.codigo,p.descripcion,p.marca,p.gramaje,p.embalaje_caja,p.estado,p.fecha_alta,p.fecha_listo,p.nota]
+      .map(v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"'));
+  }
+  const csv = '﻿' + rows.map(r=>r.join(',')).join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pendientes_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  setTimeout(()=> URL.revokeObjectURL(a.href), 1000);
+};
+
+/* ======================================================================
+   Config (modal)
+   ====================================================================== */
+$('#btnCfg').onclick = ()=>{
+  $('#cfgUrl').value = LS.url;
+  updateKpis();
+  $('#cfg').showModal();
+};
+$('#cfgClose').onclick = ()=> $('#cfg').close();
+$('#cfgSave').onclick = ()=>{
+  LS.url = $('#cfgUrl').value;
+  $('#cfgMsg').textContent = 'URL guardada.';
+  toast('Configuración guardada', 'ok');
+};
+$('#cfgTest').onclick = async ()=>{
+  $('#cfgMsg').textContent = 'Probando…';
+  const prev = LS.url;
+  LS.url = $('#cfgUrl').value;
+  try{
+    const d = await api('ping');
+    $('#cfgMsg').textContent = '✔ Conexión OK — ' + (d.service||'') + ' — ' + (d.time||'');
+    setDot(true);
+  }catch(e){
+    $('#cfgMsg').textContent = '✖ ' + e.message;
+    LS.url = prev;
+    setDot(false);
+  }
+};
+$('#cfgClose').addEventListener('click', ()=> $('#cfg').close());
+$('#btnSync').onclick = syncCatalog;
+
+/* ======================================================================
+   Botones principales
+   ====================================================================== */
+$('#btnStart').onclick = startScan;
+$('#btnStop').onclick = stopScan;
+$('#btnManual').onclick = ()=>{
+  const code = normCode($('#manual').value);
+  if(!code){ toast('Escribe un código', 'bad'); return; }
+  handleCode(code, false);
+  $('#manual').value = '';
+};
+$('#manual').addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){ e.preventDefault(); $('#btnManual').click(); }
+});
+$('#btnRefresh').onclick = refreshPendientes;
+
+/* pausar cámara al ocultar la pestaña (ahorra batería) */
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && state.scanning) stopScan();
+});
+
+/* ======================================================================
+   Arranque
+   ====================================================================== */
+(async function init(){
+  bindSaveDefault();
+  await loadCatalogFromIDB();
+  renderList();
+  if(!LS.url){
+    $('#cfg').showModal();
+    $('#cfgMsg').textContent = 'Pega aquí la URL /exec de tu Apps Script para empezar.';
+  }else{
+    setDot(null);
+    // carga inicial: pendientes siempre; catálogo solo si está vacío
+    try{
+      if(state.catalog.size === 0){
+        const data = await api('bootstrap');
+        for(const row of data.productos){
+          const c = normCode(row.codigo);
+          if(c) state.catalog.set(c, row.producto || '');
+        }
+        state.catalogCount = state.catalog.size;
+        await saveCatalogToIDB();
+        state.pendientes = data.pendientes || [];
+      }else{
+        await refreshPendientes();
+      }
+      updateKpis(); renderList(); setDot(true);
+    }catch(e){
+      setDot(false);
+      toast('Sin conexión con la hoja. Puedes escanear contra el catálogo local.', 'bad');
+    }
+  }
+})();
+</script>
+</body>
+</html>
