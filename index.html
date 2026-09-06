@@ -329,19 +329,65 @@ function fmtDate(iso){
 /* ======================================================================
    API (Apps Script)
    ====================================================================== */
-async function api(action, payload){
+/*
+ * Toda la comunicación con Apps Script va por JSONP (una etiqueta <script>).
+ * Motivo: Apps Script responde /exec con un redirect 302 a
+ * *.googleusercontent.com que NO incluye cabeceras CORS, así que fetch()
+ * desde otro dominio (GitHub Pages) falla con "NetworkError". JSONP no
+ * está sujeto a CORS. El backend detecta ?callback=... y envuelve el JSON.
+ *
+ * Límite práctico de longitud de URL ~ varios miles de chars; por eso el
+ * catálogo (replaceProductos) se envía en bloques.
+ */
+function jsonp(params, timeoutMs){
   const url = LS.url;
-  if(!url) throw new Error('Configura la URL de la API (⚙️).');
-  const res = await fetch(url, {
-    method:'POST',
-    // text/plain evita el preflight CORS de Apps Script
-    headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body: JSON.stringify(Object.assign({action}, payload||{}))
+  if(!url) return Promise.reject(new Error('Configura la URL de la API (⚙️).'));
+  return new Promise((resolve, reject)=>{
+    const cb = '__cb' + Date.now() + Math.floor(Math.random()*1e6);
+    const qs = new URLSearchParams(Object.assign({callback: cb}, flatten(params)));
+    const src = url + (url.includes('?') ? '&' : '?') + qs.toString();
+    const s = document.createElement('script');
+    let done = false;
+    const cleanup = ()=>{
+      done = true;
+      delete window[cb];
+      s.remove();
+      clearTimeout(tm);
+    };
+    const tm = setTimeout(()=>{
+      if(done) return;
+      cleanup();
+      reject(new Error('Tiempo de espera agotado. Revisa la URL /exec y que la implementación sea "Cualquier usuario".'));
+    }, timeoutMs || 20000);
+    window[cb] = (data)=>{
+      if(done) return;
+      cleanup();
+      if(data && data.ok === false) reject(new Error(data.error || 'Error del servidor'));
+      else resolve(data);
+    };
+    s.onerror = ()=>{
+      if(done) return;
+      cleanup();
+      reject(new Error('No se pudo contactar la API (¿URL correcta?).'));
+    };
+    s.src = src;
+    document.head.appendChild(s);
   });
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  const data = await res.json();
-  if(data && data.ok === false) throw new Error(data.error || 'Error del servidor');
-  return data;
+}
+
+async function api(action, payload){
+  return jsonp(Object.assign({action}, payload||{}));
+}
+
+// aplana valores para querystring (objetos/arrays -> JSON)
+function flatten(obj){
+  const out = {};
+  for(const k in obj){
+    const v = obj[k];
+    if(v === undefined || v === null) continue;
+    out[k] = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+  }
+  return out;
 }
 function setDot(ok){
   const d = $('#statusDot');
@@ -421,13 +467,24 @@ $('#xlsx').addEventListener('change', async (ev)=>{
       if(cod) seen.add(cod);
       out.push({codigo:cod, producto:prod});
     }
-    prog.value = 45;
-    msg.textContent = `Se encontraron ${out.length} filas. Enviando a la hoja…`;
+    prog.value = 40;
+    msg.textContent = `Se encontraron ${out.length} filas. Enviando a la hoja por bloques…`;
 
-    // enviar por bloques para no exceder límites de payload
-    // (una sola llamada replaceProductos con todo; 3k filas ~ 150 KB, va bien)
-    const data = await api('replaceProductos', {productos: out});
-    prog.value = 80;
+    // JSONP viaja por URL (GET) => hay que trocear. ~150 filas por bloque
+    // deja la URL en pocos miles de caracteres.
+    const CHUNK = 150;
+    // 1) vaciar catálogo de la hoja
+    await api('clearProductos');
+    // 2) enviar bloques
+    let enviados = 0;
+    for(let i=0; i<out.length; i+=CHUNK){
+      const bloque = out.slice(i, i+CHUNK);
+      const r = await api('appendProductos', {productos: bloque});
+      enviados += (r && r.agregados) ? r.agregados : bloque.length;
+      const pct = 40 + Math.round(55 * (i+bloque.length) / out.length);
+      prog.value = pct;
+      msg.textContent = `Enviando… ${Math.min(i+CHUNK, out.length)} / ${out.length}`;
+    }
 
     // refrescar catálogo local
     state.catalog.clear();
@@ -436,7 +493,7 @@ $('#xlsx').addEventListener('change', async (ev)=>{
     await saveCatalogToIDB();
     updateKpis();
     prog.value = 100;
-    msg.textContent = `Listo. Catálogo actualizado: ${data.total} productos en la hoja, ${state.catalogCount} en este dispositivo.`;
+    msg.textContent = `Listo. Catálogo actualizado: ${enviados} filas en la hoja, ${state.catalogCount} códigos en este dispositivo.`;
     toast('Catálogo cargado', 'ok');
     setDot(true);
   }catch(e){
