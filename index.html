@@ -121,7 +121,10 @@
 
 <header>
   <span id="statusDot" class="dot" title="Estado de conexión"></span>
-  <h1>Códigos pendientes</h1>
+  <div style="flex:1;min-width:0">
+    <h1>Códigos pendientes</h1>
+    <div id="catInfo" style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+  </div>
   <button class="ghost" id="btnCfg" style="padding:8px 10px">⚙️</button>
 </header>
 
@@ -207,23 +210,25 @@
 <dialog id="cfg">
   <h2 style="margin-top:0">Configuración</h2>
 
-  <label>URL de Supabase (Project URL)</label>
-  <input id="cfgUrl" class="mono" placeholder="https://xxxxxxxx.supabase.co">
-  <label>Clave anon (anon / public key)</label>
-  <input id="cfgKey" class="mono" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
-  <div class="row" style="margin-top:8px">
-    <button id="cfgTest">Probar conexión</button>
-    <button class="primary" id="cfgSave">Guardar</button>
+  <div id="cfgCredWrap">
+    <label>URL de Supabase (Project URL)</label>
+    <input id="cfgUrl" class="mono" placeholder="https://xxxxxxxx.supabase.co">
+    <label>Clave anon (anon / public key)</label>
+    <input id="cfgKey" class="mono" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
+    <div class="row" style="margin-top:8px">
+      <button id="cfgTest">Probar conexión</button>
+      <button class="primary" id="cfgSave">Guardar</button>
+    </div>
+    <div class="hint" id="cfgMsg"></div>
+    <hr style="border-color:var(--line);margin:16px 0">
   </div>
-  <div class="hint" id="cfgMsg"></div>
-
-  <hr style="border-color:var(--line);margin:16px 0">
 
   <h2 style="margin:0 0 8px">Catálogo de productos</h2>
-  <div class="kpi" style="margin-bottom:10px">
+  <div class="kpi" style="margin-bottom:6px">
     <div><b id="kCat">0</b> en este dispositivo</div>
     <div><b id="kPend">0</b> pendientes</div>
   </div>
+  <div class="hint" id="kUpd" style="margin-bottom:10px">Última actualización del catálogo: —</div>
   <div class="row">
     <button id="btnSync">↻ Sincronizar catálogo</button>
   </div>
@@ -256,17 +261,40 @@
 <script>
 "use strict";
 /* ======================================================================
+   ▸▸▸  CONFIGURACIÓN — EDITA ESTAS DOS LÍNEAS ANTES DE SUBIR A GITHUB  ◂◂◂
+   ======================================================================
+   Pega aquí la URL del proyecto y la clave anon (Project Settings ▸ API).
+   Con esto, cualquier dispositivo que abra la página entra directo,
+   sin configurar nada.
+
+   Ejemplo:
+     const SUPABASE_URL = "https://abcdefgh.supabase.co";
+     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.....";
+*/
+const SUPABASE_URL      = "https://rajjhomtvrnahvoamiyj.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhampob210dnJuYWh2b2FtaXlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3OTEyNDksImV4cCI6MjEwNDM2NzI0OX0.9VPiczEGhYxeA45xJF3ZEASnvJNiCuiyQpeTt6Q_aMQ";
+/* ==================================================================== */
+
+/* ======================================================================
    Estado y almacenamiento local
    ====================================================================== */
+// Las credenciales incrustadas tienen prioridad. Si están vacías, se usa
+// lo que se haya guardado a mano en este dispositivo (modo configuración).
 const LS = {
-  get url(){ return (localStorage.getItem('sb_url') || '').replace(/\/+$/,''); },
+  get url(){
+    return (SUPABASE_URL || localStorage.getItem('sb_url') || '').replace(/\s+/g,'').replace(/\/+$/,'');
+  },
   set url(v){ localStorage.setItem('sb_url', String(v||'').replace(/\s+/g,'').replace(/\/+$/,'')); },
-  get key(){ return (localStorage.getItem('sb_key') || '').trim(); },
+  get key(){
+    return (SUPABASE_ANON_KEY || localStorage.getItem('sb_key') || '').replace(/\s+/g,'');
+  },
   set key(v){ localStorage.setItem('sb_key', String(v||'').replace(/\s+/g,'')); },
 };
+const CRED_INCRUSTADAS = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 const state = {
   catalog: new Map(),      // codigo -> producto
   catalogCount: 0,
+  catUpdated: null,        // ISO de la última actualización del catálogo
   pendientes: [],          // [{id,codigo,...}]
   filter: 'pendiente',
   scanning: false,
@@ -482,6 +510,19 @@ const API = {
       if(onProgress) onProgress(Math.min(i+LOTE, filas.length), filas.length);
     }
     return subidas;
+  },
+  // --- metadatos (fecha de última actualización del catálogo) ---
+  async getMeta(clave){
+    const rows = await sb('meta?select=*&clave=eq.' + encodeURIComponent(clave));
+    return (Array.isArray(rows) && rows.length) ? rows[0] : null;
+  },
+  async setMeta(clave, valor){
+    // upsert por PK (clave)
+    await sb('meta', {
+      method:'POST',
+      headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+      body: [{ clave, valor: String(valor||''), fecha: new Date().toISOString() }]
+    });
   }
 };
 function setDot(ok){
@@ -499,11 +540,49 @@ async function loadCatalogFromIDB(){
     for(const [c,p] of arr) state.catalog.set(c,p);
   }
   state.catalogCount = state.catalog.size;
+  try{ state.catUpdated = await idbGet('cat_updated') || null; }catch(e){}
   updateKpis();
 }
 async function saveCatalogToIDB(){
   await idbSet('rows', [...state.catalog.entries()]);
 }
+
+// fecha de última actualización del catálogo (se guarda en el server y en IDB)
+function fmtFechaLarga(iso){
+  if(!iso) return null;
+  const d = new Date(iso);
+  if(isNaN(d)) return null;
+  return d.toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short',year:'numeric'}) +
+    ', ' + d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+}
+function pintarFechaCatalogo(){
+  const txt = fmtFechaLarga(state.catUpdated);
+  const cab = $('#catInfo');
+  const modal = $('#kUpd');
+  if(txt){
+    cab.textContent = state.catalogCount + ' productos · actualizado ' + txt;
+    modal.textContent = 'Última actualización del catálogo: ' + txt;
+  }else{
+    cab.textContent = state.catalogCount ? (state.catalogCount + ' productos') : 'Catálogo no cargado';
+    modal.textContent = 'Última actualización del catálogo: —';
+  }
+}
+async function setFechaCatalogoLocal(iso){
+  state.catUpdated = iso || null;
+  try{ await idbSet('cat_updated', state.catUpdated); }catch(e){}
+  pintarFechaCatalogo();
+}
+async function refreshFechaCatalogo(){
+  try{
+    const m = await API.getMeta('catalogo_actualizado');
+    const iso = m ? (m.valor || m.fecha) : null;
+    if(iso) await setFechaCatalogoLocal(iso);
+    else pintarFechaCatalogo();
+  }catch(e){
+    pintarFechaCatalogo();   // deja lo que ya haya en state
+  }
+}
+
 async function syncCatalog(){
   const btn = $('#btnSync'); btn.disabled = true; btn.textContent = 'Sincronizando…';
   try{
@@ -515,6 +594,7 @@ async function syncCatalog(){
     }
     state.catalogCount = state.catalog.size;
     await saveCatalogToIDB();
+    await refreshFechaCatalogo();
     updateKpis();
     setDot(true);
     toast('Catálogo sincronizado: ' + state.catalogCount + ' productos', 'ok');
@@ -528,6 +608,7 @@ async function syncCatalog(){
 function updateKpis(){
   $('#kCat').textContent = state.catalogCount;
   $('#kPend').textContent = state.pendientes.filter(p=>p.estado!=='listo').length;
+  pintarFechaCatalogo();
 }
 
 /* ---- Carga desde Excel ---- */
@@ -570,7 +651,12 @@ $('#xlsx').addEventListener('change', async (ev)=>{
       prog.value = 40 + Math.round(45 * hechas / total);
       msg.textContent = `Subiendo… ${hechas} / ${total}`;
     });
-    prog.value = 85;
+    prog.value = 88;
+
+    // registrar la fecha de actualización (compartida entre dispositivos)
+    const ahora = new Date().toISOString();
+    try{ await API.setMeta('catalogo_actualizado', ahora); }catch(e){ diag('setMeta: ' + e.message); }
+    await setFechaCatalogoLocal(ahora);
 
     // refrescar catálogo local
     state.catalog.clear();
@@ -966,9 +1052,16 @@ $('#btnExport').onclick = ()=>{
    Config (modal)
    ====================================================================== */
 $('#btnCfg').onclick = ()=>{
-  $('#cfgUrl').value = LS.url;
-  $('#cfgKey').value = LS.key;
+  if(CRED_INCRUSTADAS){
+    // credenciales fijas en el HTML: ocultar los campos, no son editables aquí
+    $('#cfgCredWrap').hidden = true;
+  }else{
+    $('#cfgCredWrap').hidden = false;
+    $('#cfgUrl').value = LS.url;
+    $('#cfgKey').value = LS.key;
+  }
   updateKpis();
+  refreshFechaCatalogo();
   $('#cfg').showModal();
 };
 $('#cfgClose').onclick = ()=> $('#cfg').close();
@@ -1064,31 +1157,42 @@ document.addEventListener('visibilitychange', ()=>{
   bindSaveDefault();
   await loadCatalogFromIDB();
   renderList();
+
   if(!LS.url || !LS.key){
+    // Solo pasa si NO se incrustaron credenciales y el dispositivo no tiene nada.
     $('#cfg').showModal();
     $('#cfgMsg').textContent = 'Pega la URL del proyecto y la clave anon de Supabase para empezar.';
-  }else{
-    setDot(null);
-    try{
-      // pendientes: siempre desde el servidor
-      const pend = await API.getPendientes();
-      state.pendientes = Array.isArray(pend) ? pend : [];
-      // catálogo: solo si el dispositivo aún no lo tiene
-      if(state.catalog.size === 0){
-        const productos = await API.getProductos();
-        for(const row of productos){
-          const c = normCode(row.codigo);
-          if(c) state.catalog.set(c, row.producto || '');
-        }
-        state.catalogCount = state.catalog.size;
-        await saveCatalogToIDB();
+    return;
+  }
+
+  // Hay credenciales (incrustadas o guardadas): entrar directo y cargar todo.
+  setDot(null);
+  try{
+    // pendientes: siempre desde el servidor
+    const pend = await API.getPendientes();
+    state.pendientes = Array.isArray(pend) ? pend : [];
+    // catálogo: descargar automáticamente si este dispositivo aún no lo tiene
+    if(state.catalog.size === 0){
+      diag('Primer arranque en este dispositivo: descargando catálogo…');
+      const productos = await API.getProductos();
+      for(const row of productos){
+        const c = normCode(row.codigo);
+        if(c) state.catalog.set(c, row.producto || '');
       }
-      updateKpis(); renderList(); setDot(true);
-    }catch(e){
-      setDot(false);
-      diag('init: ' + e.message);
-      toast('Sin conexión con Supabase. Puedes escanear contra el catálogo local.', 'bad');
+      state.catalogCount = state.catalog.size;
+      await saveCatalogToIDB();
+      if(state.catalogCount > 0){
+        toast('Catálogo descargado: ' + state.catalogCount + ' productos', 'ok');
+      }else{
+        toast('Conectado. Aún no hay catálogo cargado — súbelo desde ⚙️.', 'warn');
+      }
     }
+    await refreshFechaCatalogo();
+    updateKpis(); renderList(); setDot(true);
+  }catch(e){
+    setDot(false);
+    diag('init: ' + e.message);
+    toast('Sin conexión con Supabase. Puedes escanear contra el catálogo local.', 'bad');
   }
 })();
 </script>
