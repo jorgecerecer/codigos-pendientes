@@ -207,8 +207,10 @@
 <dialog id="cfg">
   <h2 style="margin-top:0">Configuración</h2>
 
-  <label>URL de la API (Apps Script /exec)</label>
-  <input id="cfgUrl" class="mono" placeholder="https://script.google.com/macros/s/…/exec">
+  <label>URL de Supabase (Project URL)</label>
+  <input id="cfgUrl" class="mono" placeholder="https://xxxxxxxx.supabase.co">
+  <label>Clave anon (anon / public key)</label>
+  <input id="cfgKey" class="mono" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
   <div class="row" style="margin-top:8px">
     <button id="cfgTest">Probar conexión</button>
     <button class="primary" id="cfgSave">Guardar</button>
@@ -223,14 +225,24 @@
     <div><b id="kPend">0</b> pendientes</div>
   </div>
   <div class="row">
-    <button id="btnSync">↻ Sincronizar desde la hoja</button>
+    <button id="btnSync">↻ Sincronizar catálogo</button>
   </div>
 
   <label style="margin-top:14px">Cargar / reemplazar catálogo desde Excel</label>
   <input type="file" id="xlsx" accept=".xlsx,.xls,.csv">
-  <div class="hint">Se leen las columnas <b>CODIGO</b> y <b>PRODUCTO</b>. Sube el catálogo a la hoja de Google y a este dispositivo.</div>
+  <div class="hint">Se leen las columnas <b>CODIGO</b> y <b>PRODUCTO</b>. Reemplaza el catálogo en Supabase y en este dispositivo.</div>
   <progress id="upProg" value="0" max="100" style="display:none;margin-top:8px"></progress>
   <div class="hint" id="upMsg"></div>
+
+  <hr style="border-color:var(--line);margin:16px 0">
+
+  <h2 style="margin:0 0 8px">Diagnóstico</h2>
+  <div class="hint">Registro de las últimas llamadas a la API. Útil si "Probar conexión" falla.</div>
+  <pre id="diagBox" class="mono" style="background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap;font-size:11px">— sin actividad —</pre>
+  <div class="row">
+    <button id="diagCopy">Copiar diagnóstico</button>
+    <button id="diagClear" class="ghost">Limpiar</button>
+  </div>
 
   <hr style="border-color:var(--line);margin:16px 0">
   <button class="wide ghost" id="cfgClose">Cerrar</button>
@@ -247,8 +259,10 @@
    Estado y almacenamiento local
    ====================================================================== */
 const LS = {
-  get url(){ return localStorage.getItem('api_url') || ''; },
-  set url(v){ localStorage.setItem('api_url', v.trim()); },
+  get url(){ return (localStorage.getItem('sb_url') || '').replace(/\/+$/,''); },
+  set url(v){ localStorage.setItem('sb_url', String(v||'').replace(/\s+/g,'').replace(/\/+$/,'')); },
+  get key(){ return (localStorage.getItem('sb_key') || '').trim(); },
+  set key(v){ localStorage.setItem('sb_key', String(v||'').replace(/\s+/g,'')); },
 };
 const state = {
   catalog: new Map(),      // codigo -> producto
@@ -327,68 +341,149 @@ function fmtDate(iso){
 }
 
 /* ======================================================================
-   API (Apps Script)
-   ====================================================================== */
-/*
- * Toda la comunicación con Apps Script va por JSONP (una etiqueta <script>).
- * Motivo: Apps Script responde /exec con un redirect 302 a
- * *.googleusercontent.com que NO incluye cabeceras CORS, así que fetch()
- * desde otro dominio (GitHub Pages) falla con "NetworkError". JSONP no
- * está sujeto a CORS. El backend detecta ?callback=... y envuelve el JSON.
- *
- * Límite práctico de longitud de URL ~ varios miles de chars; por eso el
- * catálogo (replaceProductos) se envía en bloques.
+   API — Supabase (PostgREST)
+   ======================================================================
+ * Supabase expone una API REST con CORS correcto, así que fetch() normal
+ * funciona desde GitHub Pages sin trucos.
+ *   GET/POST/PATCH/DELETE  {URL}/rest/v1/{tabla}?...
+ *   RPC:  POST  {URL}/rest/v1/rpc/{funcion}
+ * Autenticación: cabeceras  apikey  y  Authorization: Bearer {anon key}
  */
-function jsonp(params, timeoutMs){
-  const url = LS.url;
-  if(!url) return Promise.reject(new Error('Configura la URL de la API (⚙️).'));
-  return new Promise((resolve, reject)=>{
-    const cb = '__cb' + Date.now() + Math.floor(Math.random()*1e6);
-    const qs = new URLSearchParams(Object.assign({callback: cb}, flatten(params)));
-    const src = url + (url.includes('?') ? '&' : '?') + qs.toString();
-    const s = document.createElement('script');
-    let done = false;
-    const cleanup = ()=>{
-      done = true;
-      delete window[cb];
-      s.remove();
-      clearTimeout(tm);
-    };
-    const tm = setTimeout(()=>{
-      if(done) return;
-      cleanup();
-      reject(new Error('Tiempo de espera agotado. Revisa la URL /exec y que la implementación sea "Cualquier usuario".'));
-    }, timeoutMs || 20000);
-    window[cb] = (data)=>{
-      if(done) return;
-      cleanup();
-      if(data && data.ok === false) reject(new Error(data.error || 'Error del servidor'));
-      else resolve(data);
-    };
-    s.onerror = ()=>{
-      if(done) return;
-      cleanup();
-      reject(new Error('No se pudo contactar la API (¿URL correcta?).'));
-    };
-    s.src = src;
-    document.head.appendChild(s);
-  });
+const DIAG = [];
+function diag(msg){
+  const line = new Date().toLocaleTimeString('es-MX') + '  ' + msg;
+  DIAG.push(line);
+  if(DIAG.length > 60) DIAG.shift();
+  const box = document.getElementById('diagBox');
+  if(box) box.textContent = DIAG.join('\n');
 }
 
-async function api(action, payload){
-  return jsonp(Object.assign({action}, payload||{}));
+function sbHeaders(extra){
+  return Object.assign({
+    'apikey': LS.key,
+    'Authorization': 'Bearer ' + LS.key,
+    'Content-Type': 'application/json'
+  }, extra||{});
 }
 
-// aplana valores para querystring (objetos/arrays -> JSON)
-function flatten(obj){
-  const out = {};
-  for(const k in obj){
-    const v = obj[k];
-    if(v === undefined || v === null) continue;
-    out[k] = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+async function sb(path, opts){
+  const base = LS.url;
+  if(!base || !LS.key) throw new Error('Configura la URL y la clave de Supabase (⚙️).');
+  opts = opts || {};
+  const url = base + '/rest/v1/' + path;
+  diag('→ ' + (opts.method || 'GET') + ' ' + path.slice(0, 120));
+  let res;
+  try{
+    res = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: sbHeaders(opts.headers),
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+  }catch(e){
+    diag('✖ red: ' + e.message);
+    throw new Error('Sin conexión con Supabase (' + e.message + '). Revisa internet / la URL del proyecto.');
   }
-  return out;
+  const text = await res.text();
+  let data = null;
+  if(text){ try{ data = JSON.parse(text); }catch(e){ data = text; } }
+  if(!res.ok){
+    const msg = (data && (data.message || data.hint || data.details)) || ('HTTP ' + res.status);
+    diag('✖ ' + res.status + ' ' + msg);
+    throw new Error(msg);
+  }
+  diag('✔ ' + res.status + ' (' + (Array.isArray(data) ? data.length + ' filas' : 'ok') + ')');
+  return data;
 }
+
+/* --- operaciones concretas --- */
+const API = {
+  ping(){
+    // consulta trivial: cuenta de productos (HEAD con Prefer count)
+    return sb('productos?select=codigo&limit=1');
+  },
+  getProductos(){
+    // trae todo el catálogo paginando con limit/offset (evita headers Range)
+    return (async ()=>{
+      const all = [];
+      let offset = 0;
+      const step = 1000;
+      while(true){
+        const page = await sb('productos?select=codigo,producto&order=codigo&limit=' + step + '&offset=' + offset);
+        if(!Array.isArray(page) || page.length === 0) break;
+        all.push(...page);
+        if(page.length < step) break;
+        offset += step;
+      }
+      return all;
+    })();
+  },
+  getPendientes(){
+    return sb('pendientes?select=*&order=estado.asc,fecha_alta.desc');
+  },
+  async addPendiente(p){
+    // upsert por codigo: si ya existe, devuelve el existente sin pisar datos
+    const existing = await sb('pendientes?select=*&codigo=eq.' + encodeURIComponent(p.codigo));
+    if(Array.isArray(existing) && existing.length){
+      return { duplicado:true, pendiente: existing[0] };
+    }
+    const rows = await sb('pendientes', {
+      method:'POST',
+      headers:{ 'Prefer':'return=representation' },
+      body: [{
+        codigo: p.codigo,
+        descripcion: p.descripcion || '',
+        marca: p.marca || '',
+        gramaje: p.gramaje || '',
+        embalaje_caja: p.embalaje_caja || '',
+        nota: p.nota || '',
+        estado: 'pendiente'
+      }]
+    });
+    return { duplicado:false, pendiente: rows[0] };
+  },
+  async updatePendiente(id, campos){
+    const rows = await sb('pendientes?id=eq.' + encodeURIComponent(id), {
+      method:'PATCH',
+      headers:{ 'Prefer':'return=representation' },
+      body: campos
+    });
+    return rows[0];
+  },
+  async setEstado(id, estado){
+    const rows = await sb('rpc/set_estado_pendiente', {
+      method:'POST',
+      body: { p_id: id, p_estado: estado }
+    });
+    return Array.isArray(rows) ? rows[0] : rows;
+  },
+  deletePendiente(id){
+    return sb('pendientes?id=eq.' + encodeURIComponent(id), { method:'DELETE' });
+  },
+  // Reemplaza el catálogo: vacía la tabla y sube en lotes con upsert.
+  async reemplazarCatalogo(filas, onProgress){
+    // 1) vaciar (borra todas las filas: id "no nulo" siempre verdadero)
+    await sb('productos?codigo=neq.__nunca__', { method:'DELETE' });
+    // 2) subir en lotes de 500 con upsert (Prefer: resolution=merge-duplicates)
+    const LOTE = 500;
+    let subidas = 0;
+    for(let i=0; i<filas.length; i+=LOTE){
+      const lote = filas.slice(i, i+LOTE).map(r => ({
+        codigo: normCode(r.codigo),
+        producto: String(r.producto || '')
+      })).filter(r => r.codigo);
+      if(lote.length){
+        await sb('productos', {
+          method:'POST',
+          headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+          body: lote
+        });
+        subidas += lote.length;
+      }
+      if(onProgress) onProgress(Math.min(i+LOTE, filas.length), filas.length);
+    }
+    return subidas;
+  }
+};
 function setDot(ok){
   const d = $('#statusDot');
   d.className = 'dot ' + (ok===true?'on':ok===false?'off':'');
@@ -412,9 +507,9 @@ async function saveCatalogToIDB(){
 async function syncCatalog(){
   const btn = $('#btnSync'); btn.disabled = true; btn.textContent = 'Sincronizando…';
   try{
-    const data = await api('getProductos');
+    const productos = await API.getProductos();
     state.catalog.clear();
-    for(const row of data.productos){
+    for(const row of productos){
       const c = normCode(row.codigo);
       if(c) state.catalog.set(c, row.producto || '');
     }
@@ -427,7 +522,7 @@ async function syncCatalog(){
     setDot(false);
     toast('No se pudo sincronizar: ' + e.message, 'bad');
   }finally{
-    btn.disabled = false; btn.textContent = '↻ Sincronizar desde la hoja';
+    btn.disabled = false; btn.textContent = '↻ Sincronizar catálogo';
   }
 }
 function updateKpis(){
@@ -468,23 +563,14 @@ $('#xlsx').addEventListener('change', async (ev)=>{
       out.push({codigo:cod, producto:prod});
     }
     prog.value = 40;
-    msg.textContent = `Se encontraron ${out.length} filas. Enviando a la hoja por bloques…`;
+    msg.textContent = `Se encontraron ${out.length} filas. Subiendo a Supabase…`;
 
-    // JSONP viaja por URL (GET) => hay que trocear. ~150 filas por bloque
-    // deja la URL en pocos miles de caracteres.
-    const CHUNK = 150;
-    // 1) vaciar catálogo de la hoja
-    await api('clearProductos');
-    // 2) enviar bloques
-    let enviados = 0;
-    for(let i=0; i<out.length; i+=CHUNK){
-      const bloque = out.slice(i, i+CHUNK);
-      const r = await api('appendProductos', {productos: bloque});
-      enviados += (r && r.agregados) ? r.agregados : bloque.length;
-      const pct = 40 + Math.round(55 * (i+bloque.length) / out.length);
-      prog.value = pct;
-      msg.textContent = `Enviando… ${Math.min(i+CHUNK, out.length)} / ${out.length}`;
-    }
+    // Vacía la tabla y sube en lotes de 500 (upsert).
+    const enviados = await API.reemplazarCatalogo(out, (hechas, total)=>{
+      prog.value = 40 + Math.round(45 * hechas / total);
+      msg.textContent = `Subiendo… ${hechas} / ${total}`;
+    });
+    prog.value = 85;
 
     // refrescar catálogo local
     state.catalog.clear();
@@ -493,7 +579,7 @@ $('#xlsx').addEventListener('change', async (ev)=>{
     await saveCatalogToIDB();
     updateKpis();
     prog.value = 100;
-    msg.textContent = `Listo. Catálogo actualizado: ${enviados} filas en la hoja, ${state.catalogCount} códigos en este dispositivo.`;
+    msg.textContent = `Listo. Catálogo actualizado: ${enviados} filas en Supabase, ${state.catalogCount} códigos en este dispositivo.`;
     toast('Catálogo cargado', 'ok');
     setDot(true);
   }catch(e){
@@ -658,7 +744,7 @@ $('#btnSave').onclick = async ()=>{
   }
   const btn = $('#btnSave'); btn.disabled = true; btn.textContent = 'Guardando…';
   try{
-    const data = await api('addPendiente', {
+    const data = await API.addPendiente({
       codigo, descripcion, marca, gramaje,
       embalaje_caja: $('#fEmb').value.trim(),
       nota: $('#fNota').value.trim()
@@ -686,8 +772,8 @@ $('#btnSave').onclick = async ()=>{
 async function refreshPendientes(){
   const btn = $('#btnRefresh'); btn.disabled = true;
   try{
-    const data = await api('getPendientes');
-    state.pendientes = data.pendientes || [];
+    const rows = await API.getPendientes();
+    state.pendientes = Array.isArray(rows) ? rows : [];
     renderList(); updateKpis();
     setDot(true);
   }catch(e){
@@ -758,7 +844,7 @@ $('#list').addEventListener('click', async (ev)=>{
     if(!confirm('¿Eliminar este pendiente?\n' + p.codigo + ' — ' + (p.descripcion||''))) return;
     btn.disabled = true;
     try{
-      await api('deletePendiente', {id});
+      await API.deletePendiente(id);
       state.pendientes = state.pendientes.filter(x => x.id !== id);
       renderList(); updateKpis(); setDot(true);
       toast('Eliminado', 'ok');
@@ -770,9 +856,9 @@ $('#list').addEventListener('click', async (ev)=>{
     const nuevo = act === 'done' ? 'listo' : 'pendiente';
     btn.disabled = true;
     try{
-      const data = await api('updatePendiente', {id, estado:nuevo});
+      const pend = await API.setEstado(id, nuevo);
       const ix = state.pendientes.findIndex(x => x.id === id);
-      if(ix >= 0) state.pendientes[ix] = data.pendiente;
+      if(ix >= 0 && pend) state.pendientes[ix] = pend;
       renderList(); updateKpis(); setDot(true);
       toast(nuevo === 'listo' ? '✔ Marcado como registrado' : 'Reabierto', 'ok');
       if(nuevo==='listo') { beep(true); vibrate(60); }
@@ -802,13 +888,13 @@ $('#list').addEventListener('click', async (ev)=>{
       if(!descripcion || !marca || !gramaje){ toast('Descripción, marca y gramaje son obligatorios','bad'); return; }
       save.disabled = true; save.textContent = 'Guardando…';
       try{
-        const data = await api('updatePendiente', {
-          id: p.id, descripcion, marca, gramaje,
+        const pend = await API.updatePendiente(p.id, {
+          descripcion, marca, gramaje,
           embalaje_caja: $('#fEmb').value.trim(),
           nota: $('#fNota').value.trim()
         });
         const ix = state.pendientes.findIndex(x => x.id === p.id);
-        if(ix >= 0) state.pendientes[ix] = data.pendiente;
+        if(ix >= 0 && pend) state.pendientes[ix] = pend;
         renderList(); updateKpis();
         hideForm();
         $('#formCard').querySelector('h2').textContent = 'Registrar pendiente';
@@ -832,7 +918,7 @@ function bindSaveDefault(){
     if(!descripcion || !marca || !gramaje){ toast('Descripción, marca y gramaje son obligatorios','bad'); return; }
     const btn = $('#btnSave'); btn.disabled = true; btn.textContent = 'Guardando…';
     try{
-      const data = await api('addPendiente', {
+      const data = await API.addPendiente({
         codigo, descripcion, marca, gramaje,
         embalaje_caja: $('#fEmb').value.trim(),
         nota: $('#fNota').value.trim()
@@ -881,30 +967,73 @@ $('#btnExport').onclick = ()=>{
    ====================================================================== */
 $('#btnCfg').onclick = ()=>{
   $('#cfgUrl').value = LS.url;
+  $('#cfgKey').value = LS.key;
   updateKpis();
   $('#cfg').showModal();
 };
 $('#cfgClose').onclick = ()=> $('#cfg').close();
-$('#cfgSave').onclick = ()=>{
+$('#cfgSave').onclick = async ()=>{
   LS.url = $('#cfgUrl').value;
-  $('#cfgMsg').textContent = 'URL guardada.';
+  LS.key = $('#cfgKey').value;
+  $('#cfgUrl').value = LS.url;
+  $('#cfgKey').value = LS.key;
+  diag('Config guardada. URL: ' + LS.url + '  key: ' + (LS.key ? LS.key.slice(0,8)+'…' : '(vacía)'));
+  if(!LS.url || !LS.key){
+    $('#cfgMsg').textContent = 'Falta la URL o la clave.';
+    return;
+  }
   toast('Configuración guardada', 'ok');
+  $('#cfg').close();
+  // primera carga tras configurar
+  setDot(null);
+  try{
+    const pend = await API.getPendientes();
+    state.pendientes = Array.isArray(pend) ? pend : [];
+    if(state.catalog.size === 0){
+      const productos = await API.getProductos();
+      state.catalog.clear();
+      for(const row of productos){
+        const c = normCode(row.codigo);
+        if(c) state.catalog.set(c, row.producto || '');
+      }
+      state.catalogCount = state.catalog.size;
+      await saveCatalogToIDB();
+    }
+    updateKpis(); renderList(); setDot(true);
+    if(state.catalog.size === 0){
+      toast('Conectado. Ahora carga tu catálogo desde ⚙️.', 'ok');
+    }
+  }catch(e){
+    setDot(false);
+    toast('Conectó pero falló la carga: ' + e.message, 'bad');
+  }
 };
 $('#cfgTest').onclick = async ()=>{
   $('#cfgMsg').textContent = 'Probando…';
-  const prev = LS.url;
+  const prevU = LS.url, prevK = LS.key;
   LS.url = $('#cfgUrl').value;
+  LS.key = $('#cfgKey').value;
+  $('#cfgUrl').value = LS.url; $('#cfgKey').value = LS.key;
   try{
-    const d = await api('ping');
-    $('#cfgMsg').textContent = '✔ Conexión OK — ' + (d.service||'') + ' — ' + (d.time||'');
+    await API.ping();
+    $('#cfgMsg').textContent = '✔ Conexión OK con Supabase';
     setDot(true);
   }catch(e){
     $('#cfgMsg').textContent = '✖ ' + e.message;
-    LS.url = prev;
+    LS.url = prevU; LS.key = prevK;
     setDot(false);
   }
 };
-$('#cfgClose').addEventListener('click', ()=> $('#cfg').close());
+$('#diagCopy').onclick = async ()=>{
+  const txt = 'URL: ' + LS.url + '\nkey: ' + (LS.key ? LS.key.slice(0,8)+'…' : '(vacía)') + '\nUA: ' + navigator.userAgent + '\n\n' + DIAG.join('\n');
+  try{ await navigator.clipboard.writeText(txt); toast('Diagnóstico copiado', 'ok'); }
+  catch(e){
+    const t = document.createElement('textarea'); t.value = txt; document.body.appendChild(t);
+    t.select(); document.execCommand('copy'); t.remove();
+    toast('Diagnóstico copiado', 'ok');
+  }
+};
+$('#diagClear').onclick = ()=>{ DIAG.length = 0; $('#diagBox').textContent = '— sin actividad —'; };
 $('#btnSync').onclick = syncCatalog;
 
 /* ======================================================================
@@ -935,29 +1064,30 @@ document.addEventListener('visibilitychange', ()=>{
   bindSaveDefault();
   await loadCatalogFromIDB();
   renderList();
-  if(!LS.url){
+  if(!LS.url || !LS.key){
     $('#cfg').showModal();
-    $('#cfgMsg').textContent = 'Pega aquí la URL /exec de tu Apps Script para empezar.';
+    $('#cfgMsg').textContent = 'Pega la URL del proyecto y la clave anon de Supabase para empezar.';
   }else{
     setDot(null);
-    // carga inicial: pendientes siempre; catálogo solo si está vacío
     try{
+      // pendientes: siempre desde el servidor
+      const pend = await API.getPendientes();
+      state.pendientes = Array.isArray(pend) ? pend : [];
+      // catálogo: solo si el dispositivo aún no lo tiene
       if(state.catalog.size === 0){
-        const data = await api('bootstrap');
-        for(const row of data.productos){
+        const productos = await API.getProductos();
+        for(const row of productos){
           const c = normCode(row.codigo);
           if(c) state.catalog.set(c, row.producto || '');
         }
         state.catalogCount = state.catalog.size;
         await saveCatalogToIDB();
-        state.pendientes = data.pendientes || [];
-      }else{
-        await refreshPendientes();
       }
       updateKpis(); renderList(); setDot(true);
     }catch(e){
       setDot(false);
-      toast('Sin conexión con la hoja. Puedes escanear contra el catálogo local.', 'bad');
+      diag('init: ' + e.message);
+      toast('Sin conexión con Supabase. Puedes escanear contra el catálogo local.', 'bad');
     }
   }
 })();
